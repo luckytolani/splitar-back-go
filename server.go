@@ -1,70 +1,84 @@
 package main
 
 import (
-	"flag"
+	"context"
 	"fmt"
-	"html"
 	"log"
-	"mymodule/database"
-	"net/http"
 	"os"
-	"runtime/debug"
-	"strings"
-)
+	"time"
 
-func usage() {
-	fmt.Fprintf(os.Stderr, "usage: helloserver [options]\n")
-	flag.PrintDefaults()
-	os.Exit(2)
-}
-
-var (
-	greeting = flag.String("g", "Hello", "Greet with `greeting`")
-	addr     = flag.String("addr", "localhost:8080", "address to serve")
+	"github.com/gofiber/fiber/v2"
+	"github.com/joho/godotenv"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 func main() {
 
-	mongoURI := "mongodb://localhost:27017"
-	database.InitMongoDB(mongoURI)
+	app := fiber.New()
 
-	// Parse flags.
-	flag.Usage = usage
-	flag.Parse()
+	Connect()
 
-	// Parse and validate arguments (none).
-	args := flag.Args()
-	if len(args) != 0 {
-		usage()
-	}
+	app.Get("/", func(c *fiber.Ctx) error {
+		return c.SendString("Hello, World!555")
+	})
 
-	// Register handlers.
-	// All requests not otherwise mapped with go to greet.
-	// /version is mapped specifically to version.
-	http.HandleFunc("/", greet)
-	http.HandleFunc("/version", version)
+	app.Get("/:value", func(c *fiber.Ctx) error {
+		return c.SendString("value: " + c.Params("value"))
+		// => Get request with value: hello world
+	})
 
-	log.Printf("serving http://%s\n", *addr)
-	log.Fatal(http.ListenAndServe(*addr, nil))
+	app.Listen(":3000")
 }
 
-func version(w http.ResponseWriter, r *http.Request) {
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		http.Error(w, "no build information available", 500)
-		return
+func Connect() *mongo.Collection {
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Find .evn
+	err := godotenv.Load(".env")
+	if err != nil {
+		log.Fatalf("Error loading .env file: %s", err)
 	}
 
-	fmt.Fprintf(w, "<!DOCTYPE html>\n<pre>\n")
-	fmt.Fprintf(w, "%s\n", html.EscapeString(info.String()))
-}
+	// Get value from .env
+	mongoUri := os.Getenv("MONGO_URI")
 
-func greet(w http.ResponseWriter, r *http.Request) {
-	name := strings.Trim(r.URL.Path, "/")
-	if name == "" {
-		name = "Gopher"
+	// Connect to the database.
+	clientOptions := options.Client().ApplyURI(mongoUri)
+	client, err := mongo.Connect(context.Background(), clientOptions)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() {
+		if err = client.Disconnect(ctx); err != nil {
+			panic(err)
+		}
+	}()
+
+	// Check the connection.
+	err = client.Ping(context.Background(), nil)
+	if err != nil {
+		log.Fatal(err)
+	} else {
+		fmt.Println("Connected to mongoDB!!!")
 	}
 
-	fmt.Fprintf(w, "<!DOCTYPE html>\n")
-	fmt.Fprintf(w, "%s, %s!\n", *greeting, html.EscapeString(name))
+	collection := client.Database("testdb").Collection("test")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println("Connected to db")
+	ctx, cancel = context.WithTimeout(context.Background(), 30*time.Second)
+
+	defer cancel()
+
+	res, err := collection.InsertOne(ctx, bson.D{{Key: "name", Value: "pi"}, {Key: "value", Value: 3.14159}})
+	fmt.Println(res.InsertedID)
+	// id := res.InsertedID
+
+	return collection
 }
